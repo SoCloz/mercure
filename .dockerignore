@@ -1,0 +1,11 @@
+.*
+Dockerfile*
+charts/
+conformance-tests/
+docs/
+examples/
+fixtures/
+gatling/
+tests
+**/*_test.go
+**/*.md
