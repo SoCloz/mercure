@@ -1,19 +1,16 @@
-FROM alpine:latest as builder
+FROM golang:1.21-alpine AS builder
 
-ENV GOROOT=/usr/lib/go
-ENV PATH="${GOROOT}/bin:${PATH}"
-RUN apk upgrade --update --no-cache && apk add --no-cache go
-WORKDIR /usr/src/mercure
-COPY . .
-RUN cd caddy && \
-    go mod tidy && \
-    cd mercure && \
-    go build
+RUN apk upgrade --update --no-cache
+COPY . /go/src/mercure
+WORKDIR /go/src/mercure/caddy
+RUN --mount=type=cache,mode=0755,target=/go/pkg/mod go mod tidy
+WORKDIR /go/src/mercure/caddy/mercure
+RUN --mount=type=cache,mode=0755,target=/go/pkg/mod go build
 
-FROM caddy:latest
+FROM caddy:2-alpine
 ENV MERCURE_TRANSPORT_URL=bolt:///data/mercure.db
 
 RUN apk upgrade --update --no-cache
-COPY --from=builder /usr/src/mercure/caddy/mercure/mercure /usr/bin/caddy
-COPY --from=builder /usr/src/mercure/Caddyfile /etc/caddy/Caddyfile
-COPY --from=builder /usr/src/mercure/Caddyfile.dev /etc/caddy/Caddyfile.dev
+COPY --from=builder /go/src/mercure/caddy/mercure/mercure /usr/bin/caddy
+COPY --from=builder /go/src/mercure/Caddyfile /etc/caddy/Caddyfile
+COPY --from=builder /go/src/mercure/Caddyfile.dev /etc/caddy/Caddyfile.dev

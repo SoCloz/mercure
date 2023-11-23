@@ -96,7 +96,7 @@ func (t *RedisTransport) connect(u *url.URL) error {
 
 	client := redis.NewClient(options)
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		return fmt.Errorf("Failed to connect to Redis: %w", err)
+		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 	t.client = client
 	return nil
@@ -265,7 +265,7 @@ func (t *RedisTransport) dispatchHistory(s *Subscriber) (err error) {
 		var update *Update
 		v, ok := msg.Values[`update`]
 		if !ok {
-			err = fmt.Errorf("Malformed update message for %s", key)
+			err = fmt.Errorf("malformed update message for %s", key)
 			break
 		}
 		if upds, ok := v.(string); ok {
@@ -280,7 +280,7 @@ func (t *RedisTransport) dispatchHistory(s *Subscriber) (err error) {
 				responseLastEventID = msg.ID
 			}
 		} else {
-			err = fmt.Errorf("Bad update type for %s", key)
+			err = fmt.Errorf("bad update type for %s", key)
 			break
 		}
 	}

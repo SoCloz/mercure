@@ -1,11 +1,11 @@
 # Learn how to configure the Mercure.rocks Hub on https://mercure.rocks/docs/hub/config
 {
-	order mercure after encode
+	order mercure after encode 
 
 	{$GLOBAL_OPTIONS}
 }
 
-{$CADDY_EXTRA_CONFIG}
+{$CADDY_EXTRA_CONFIG} 
 
 {$SERVER_NAME:localhost} {
 	log {
