@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MicahParks/keyfunc/v3"
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
@@ -24,13 +25,15 @@ import (
 const defaultHubURL = "/.well-known/mercure"
 
 var (
-	transports = caddy.NewUsagePool()                                       //nolint:gochecknoglobals
-	metrics    = mercure.NewPrometheusMetrics(prometheus.DefaultRegisterer) //nolint:gochecknoglobals
+	ErrCompatibility = errors.New("compatibility mode only supports protocol version 7")
+	transports       = caddy.NewUsagePool()                                       //nolint:gochecknoglobals
+	metrics          = mercure.NewPrometheusMetrics(prometheus.DefaultRegisterer) //nolint:gochecknoglobals
 )
 
 func init() { //nolint:gochecknoinits
 	caddy.RegisterModule(Mercure{})
 	httpcaddyfile.RegisterHandlerDirective("mercure", parseCaddyfile)
+	httpcaddyfile.RegisterDirectiveOrder("mercure", "after", "encode")
 }
 
 type JWTConfig struct {
@@ -43,7 +46,7 @@ type transportDestructor struct {
 }
 
 func (d *transportDestructor) Destruct() error {
-	return d.transport.Close()
+	return d.transport.Close() //nolint:wrapcheck
 }
 
 // Mercure implements a Mercure hub as a Caddy module. Mercure is a protocol allowing to push data updates to web browsers and other HTTP clients in a convenient, fast, reliable and battery-efficient way.
@@ -72,8 +75,14 @@ type Mercure struct {
 	// JWT key and signing algorithm to use for publishers.
 	PublisherJWT JWTConfig `json:"publisher_jwt,omitempty"`
 
+	// JWK Set URL to use for publishers.
+	PublisherJWKSURL string `json:"publisher_jwks_url,omitempty"`
+
 	// JWT key and signing algorithm to use for subscribers.
 	SubscriberJWT JWTConfig `json:"subscriber_jwt,omitempty"`
+
+	// JWK Set URL to use for subscribers.
+	SubscriberJWKSURL string `json:"subscriber_jwks_url,omitempty"`
 
 	// Origins allowed to publish updates
 	PublishOrigins []string `json:"publish_origins,omitempty"`
@@ -105,20 +114,45 @@ func (Mercure) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-func (m *Mercure) Provision(ctx caddy.Context) error { //nolint:funlen
+func (m *Mercure) populateJWTConfig() error {
 	repl := caddy.NewReplacer()
 
-	m.PublisherJWT.Key = repl.ReplaceKnown(m.PublisherJWT.Key, "")
-	m.PublisherJWT.Alg = repl.ReplaceKnown(m.PublisherJWT.Alg, "HS256")
-	m.SubscriberJWT.Key = repl.ReplaceKnown(m.SubscriberJWT.Key, "")
-	m.SubscriberJWT.Alg = repl.ReplaceKnown(m.SubscriberJWT.Alg, "HS256")
+	if m.PublisherJWKSURL == "" {
+		m.PublisherJWT.Key = repl.ReplaceKnown(m.PublisherJWT.Key, "")
+		m.PublisherJWT.Alg = repl.ReplaceKnown(m.PublisherJWT.Alg, "HS256")
 
-	if m.PublisherJWT.Key == "" {
-		return errors.New("a JWT key for publishers must be provided") //nolint:goerr113
+		if m.PublisherJWT.Key == "" {
+			return errors.New("a JWT key or the URL of a JWK Set for publishers must be provided") //nolint:goerr113
+		}
+
+		if m.PublisherJWT.Alg == "" {
+			m.PublisherJWT.Alg = "HS256"
+		}
 	}
-	if m.PublisherJWT.Alg == "" {
-		m.PublisherJWT.Alg = "HS256"
+
+	if m.SubscriberJWKSURL == "" {
+		m.SubscriberJWT.Key = repl.ReplaceKnown(m.SubscriberJWT.Key, "")
+		m.SubscriberJWT.Alg = repl.ReplaceKnown(m.SubscriberJWT.Alg, "HS256")
+
+		if m.SubscriberJWT.Key == "" {
+			if !m.Anonymous {
+				return errors.New("a JWT key or the URL of a JWK Set for subscribers must be provided") //nolint:goerr113
+			}
+		}
+
+		if m.SubscriberJWT.Alg == "" {
+			m.SubscriberJWT.Alg = "HS256"
+		}
 	}
+
+	return nil
+}
+
+func (m *Mercure) Provision(ctx caddy.Context) error { //nolint:funlen,gocognit
+	if err := m.populateJWTConfig(); err != nil {
+		return err
+	}
+
 	if m.TransportURL == "" {
 		m.TransportURL = "bolt://mercure.db"
 	}
@@ -140,13 +174,16 @@ func (m *Mercure) Provision(ctx caddy.Context) error { //nolint:funlen
 			return nil, fmt.Errorf("invalid transport url: %w", err)
 		}
 
-		if m.WriteTimeout != nil {
-			query := u.Query()
-			if !query.Has("write_timeout") {
-				query.Set("write_timeout", time.Duration(*m.WriteTimeout).String())
-				u.RawQuery = query.Encode()
-			}
+		query := u.Query()
+		if m.WriteTimeout != nil && !query.Has("write_timeout") {
+			query.Set("write_timeout", time.Duration(*m.WriteTimeout).String())
 		}
+
+		if m.Subscriptions && !query.Has("subscriptions") {
+			query.Set("subscriptions", "1")
+		}
+
+		u.RawQuery = query.Encode()
 
 		transport, err := mercure.NewTransport(u, m.logger)
 		if err != nil {
@@ -164,22 +201,30 @@ func (m *Mercure) Provision(ctx caddy.Context) error { //nolint:funlen
 		mercure.WithTopicSelectorStore(tss),
 		mercure.WithTransport(destructor.(*transportDestructor).transport),
 		mercure.WithMetrics(metrics),
-		mercure.WithPublisherJWT([]byte(m.PublisherJWT.Key), m.PublisherJWT.Alg),
 		mercure.WithCookieName(m.CookieName),
 	}
 	if m.logger.Core().Enabled(zapcore.DebugLevel) {
 		opts = append(opts, mercure.WithDebug())
 	}
-
-	if m.SubscriberJWT.Key == "" {
-		if !m.Anonymous {
-			return errors.New("a JWT key for subscribers must be provided") //nolint:goerr113
-		}
+	if m.PublisherJWKSURL == "" {
+		opts = append(opts, mercure.WithPublisherJWT([]byte(m.PublisherJWT.Key), m.PublisherJWT.Alg))
 	} else {
-		if m.SubscriberJWT.Alg == "" {
-			m.SubscriberJWT.Alg = "HS256"
+		k, err := keyfunc.NewDefaultCtx(ctx, []string{m.PublisherJWKSURL})
+		if err != nil {
+			return fmt.Errorf("failed to retrieve publisher JWK Set: %w", err)
 		}
 
+		opts = append(opts, mercure.WithPublisherJWTKeyFunc(k.Keyfunc))
+	}
+
+	if m.SubscriberJWKSURL != "" {
+		k, err := keyfunc.NewDefaultCtx(ctx, []string{m.SubscriberJWKSURL})
+		if err != nil {
+			return fmt.Errorf("failed to retrieve subscriber JWK Set: %w", err)
+		}
+
+		opts = append(opts, mercure.WithSubscriberJWTKeyFunc(k.Keyfunc))
+	} else if m.SubscriberJWT.Key != "" {
 		opts = append(opts, mercure.WithSubscriberJWT([]byte(m.SubscriberJWT.Key), m.SubscriberJWT.Alg))
 	}
 
@@ -232,7 +277,7 @@ func (m *Mercure) Cleanup() error {
 
 func (m Mercure) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	if !strings.HasPrefix(r.URL.Path, defaultHubURL) {
-		return next.ServeHTTP(w, r)
+		return next.ServeHTTP(w, r) //nolint:wrapcheck
 	}
 
 	m.hub.ServeHTTP(w, r)
@@ -241,7 +286,7 @@ func (m Mercure) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 }
 
 // UnmarshalCaddyfile sets up the handler from Caddyfile tokens.
-func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:funlen,gocognit
+func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:funlen,gocognit,gocyclo
 	for d.Next() {
 		for d.NextBlock(0) {
 			switch d.Val() {
@@ -259,7 +304,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 
 			case "write_timeout":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				d, err := caddy.ParseDuration(d.Val())
@@ -272,7 +317,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 
 			case "dispatch_timeout":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				d, err := caddy.ParseDuration(d.Val())
@@ -285,7 +330,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 
 			case "heartbeat":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				d, err := caddy.ParseDuration(d.Val())
@@ -296,9 +341,16 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 				cd := caddy.Duration(d)
 				m.Heartbeat = &cd
 
+			case "publisher_jwks_url":
+				if !d.NextArg() {
+					return d.ArgErr() //nolint:wrapcheck
+				}
+
+				m.PublisherJWKSURL = d.Val()
+
 			case "publisher_jwt":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.PublisherJWT.Key = d.Val()
@@ -306,9 +358,16 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 					m.PublisherJWT.Alg = d.Val()
 				}
 
+			case "subscriber_jwks_url":
+				if !d.NextArg() {
+					return d.ArgErr() //nolint:wrapcheck
+				}
+
+				m.SubscriberJWKSURL = d.Val()
+
 			case "subscriber_jwt":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.SubscriberJWT.Key = d.Val()
@@ -319,7 +378,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 			case "publish_origins":
 				ra := d.RemainingArgs()
 				if len(ra) == 0 {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.PublishOrigins = ra
@@ -327,21 +386,21 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 			case "cors_origins":
 				ra := d.RemainingArgs()
 				if len(ra) == 0 {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.CORSOrigins = ra
 
 			case "transport_url":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.TransportURL = d.Val()
 
 			case "lru_cache":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				v, err := strconv.ParseInt(d.Val(), 10, 64)
@@ -353,14 +412,14 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 
 			case "cookie_name":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				m.CookieName = d.Val()
 
 			case "protocol_version_compatibility":
 				if !d.NextArg() {
-					return d.ArgErr()
+					return d.ArgErr() //nolint:wrapcheck
 				}
 
 				v, err := strconv.Atoi(d.Val())
@@ -369,7 +428,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 				}
 
 				if v != 7 {
-					return errors.New("compatibility mode only supports protocol version 7")
+					return ErrCompatibility
 				}
 
 				m.ProtocolVersionCompatibility = v
@@ -381,7 +440,7 @@ func (m *Mercure) UnmarshalCaddyfile(d *caddyfile.Dispenser) error { //nolint:fu
 }
 
 // parseCaddyfile unmarshals tokens from h into a new Middleware.
-func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) { //nolint:ireturn
 	var m Mercure
 	err := m.UnmarshalCaddyfile(h.Dispenser)
 

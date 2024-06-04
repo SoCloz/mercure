@@ -256,7 +256,13 @@ func (h *Hub) chainHandlers() http.Handler { //nolint:funlen
 	}
 
 	secureHandler := secureMiddleware.Handler(useForwardedHeadersHandlers)
-	loggingHandler := handlers.CombinedLoggingHandler(os.Stderr, secureHandler)
+
+	var loggingHandler http.Handler
+	if h.logger != nil && h.logger.Level().Enabled(zap.FatalLevel) {
+		loggingHandler = handlers.CombinedLoggingHandler(os.Stderr, secureHandler)
+	} else {
+		loggingHandler = secureHandler
+	}
 	recoveryHandler := handlers.RecoveryHandler(
 		handlers.RecoveryLogger(zapRecoveryHandlerLogger{h.logger}),
 		handlers.PrintRecoveryStack(h.debug),
@@ -312,7 +318,7 @@ func (h *Hub) metricsHandler() http.Handler {
 
 // Deprecated: use the Caddy server module or the standalone library instead.
 func registerHealthz(router *mux.Router) {
-	router.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "ok")
 	}).Methods(http.MethodGet, http.MethodHead)
 }

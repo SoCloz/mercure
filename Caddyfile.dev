@@ -1,7 +1,5 @@
 # Learn how to configure the Mercure.rocks Hub on https://mercure.rocks/docs/hub/config
 {
-	order mercure after encode 
-
 	{$GLOBAL_OPTIONS}
 }
 
@@ -10,9 +8,8 @@
 {$SERVER_NAME:localhost} {
 	log {
 		format filter {
-			wrap console
 			fields {
-				uri query {
+				request>uri query {
 					replace authorization REDACTED
 				}
 			}
@@ -41,6 +38,9 @@
 	{$CADDY_SERVER_EXTRA_DIRECTIVES}
 
 	redir / /.well-known/mercure/ui/
+
 	respond /healthz 200
+	respond /robots.txt `User-agent: *
+Disallow: /`
 	respond "Not Found" 404
 }

@@ -1,7 +1,6 @@
 package mercure
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,7 +40,7 @@ func TestNewHubWithConfig(t *testing.T) {
 		WithSubscriberJWT([]byte("bar"), jwt.SigningMethodHS256.Name),
 	)
 	require.NotNil(t, h)
-	require.Nil(t, err)
+	require.NoError(t, err)
 }
 
 func TestNewHubValidationError(t *testing.T) {
@@ -72,7 +71,7 @@ func TestStartCrash(t *testing.T) {
 	err := cmd.Run()
 
 	var e *exec.ExitError
-	require.True(t, errors.As(err, &e))
+	require.ErrorAs(t, err, &e)
 	assert.False(t, e.Success())
 }
 
@@ -123,7 +122,7 @@ func TestWithProtocolVersionCompatibility(t *testing.T) {
 	assert.False(t, op.isBackwardCompatiblyEnabledWith(7))
 
 	o := WithProtocolVersionCompatibility(7)
-	require.Nil(t, o(op))
+	require.NoError(t, o(op))
 	assert.Equal(t, 7, op.protocolVersionCompatibility)
 	assert.True(t, op.isBackwardCompatiblyEnabledWith(7))
 	assert.True(t, op.isBackwardCompatiblyEnabledWith(8))
@@ -148,12 +147,44 @@ func TestWithProtocolVersionCompatibilityVersions(t *testing.T) {
 			o := WithProtocolVersionCompatibility(tc.version)
 
 			if tc.ok {
-				require.Nil(t, o(op))
+				require.NoError(t, o(op))
 			} else {
 				require.Error(t, o(op))
 			}
 		})
 	}
+}
+
+func TestWithPublisherJWTKeyFunc(t *testing.T) {
+	op := &opt{}
+
+	o := WithPublisherJWTKeyFunc(func(_ *jwt.Token) (interface{}, error) { return []byte{}, nil })
+	require.NoError(t, o(op))
+	require.NotNil(t, op.publisherJWTKeyFunc)
+}
+
+func TestWithSubscriberJWTKeyFunc(t *testing.T) {
+	op := &opt{}
+
+	o := WithSubscriberJWTKeyFunc(func(_ *jwt.Token) (interface{}, error) { return []byte{}, nil })
+	require.NoError(t, o(op))
+	require.NotNil(t, op.subscriberJWTKeyFunc)
+}
+
+func TestWithDebug(t *testing.T) {
+	op := &opt{}
+
+	o := WithDebug()
+	require.NoError(t, o(op))
+	require.True(t, op.debug)
+}
+
+func TestWithUI(t *testing.T) {
+	op := &opt{}
+
+	o := WithUI()
+	require.NoError(t, o(op))
+	require.True(t, op.ui)
 }
 
 func TestOriginsValidator(t *testing.T) {
@@ -187,18 +218,18 @@ func TestOriginsValidator(t *testing.T) {
 
 	for _, origins := range validOrigins {
 		o := WithPublishOrigins(origins)
-		require.Nil(t, o(op), "error while not expected for %#v", origins)
+		require.NoError(t, o(op), "error while not expected for %#v", origins)
 
 		o = WithCORSOrigins(origins)
-		require.Nil(t, o(op), "error while not expected for %#v", origins)
+		require.NoError(t, o(op), "error while not expected for %#v", origins)
 	}
 
 	for _, origins := range invalidOrigins {
 		o := WithPublishOrigins(origins)
-		require.NotNil(t, o(op), "no error while expected for %#v", origins)
+		require.Error(t, o(op), "no error while expected for %#v", origins)
 
 		o = WithCORSOrigins(origins)
-		require.NotNil(t, o(op), "no error while expected for %#v", origins)
+		require.Error(t, o(op), "no error while expected for %#v", origins)
 	}
 }
 
@@ -231,20 +262,20 @@ func createAnonymousDummy(options ...Option) *Hub {
 	return createDummy(options...)
 }
 
-func createDummyAuthorizedJWT(h *Hub, r role, topics []string) string {
-	return createDummyAuthorizedJWTWithPayload(h, r, topics, struct {
+func createDummyAuthorizedJWT(r role, topics []string) string {
+	return createDummyAuthorizedJWTWithPayload(r, topics, struct {
 		Foo string `json:"foo"`
 	}{Foo: "bar"})
 }
 
-func createDummyAuthorizedJWTWithPayload(h *Hub, r role, topics []string, payload interface{}) string {
+func createDummyAuthorizedJWTWithPayload(r role, topics []string, payload interface{}) string {
 	token := jwt.New(jwt.SigningMethodHS256)
 
 	var key []byte
 	switch r {
 	case rolePublisher:
 		token.Claims = &claims{Mercure: mercureClaim{Publish: topics}, RegisteredClaims: jwt.RegisteredClaims{}}
-		key = h.publisherJWT.key
+		key = []byte("publisher")
 
 	case roleSubscriber:
 		token.Claims = &claims{
@@ -255,7 +286,7 @@ func createDummyAuthorizedJWTWithPayload(h *Hub, r role, topics []string, payloa
 			RegisteredClaims: jwt.RegisteredClaims{},
 		}
 
-		key = h.subscriberJWT.key
+		key = []byte("subscriber")
 	}
 
 	tokenString, _ := token.SignedString(key)

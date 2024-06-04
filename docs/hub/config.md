@@ -42,6 +42,8 @@ The following Mercure-specific directives are available:
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------|
 | `publisher_jwt <key> [<algorithm>]`  | the JWT key and algorithm to use for publishers, can contain [placeholders](https://caddyserver.com/docs/conventions#placeholders)                                                                                                             |                        |
 | `subscriber_jwt <key> [<algorithm>]` | the JWT key and algorithm to use for subscribers, can contain [placeholders](https://caddyserver.com/docs/conventions#placeholders)                                                                                                            |                        |
+| `publisher_jwks_url`                 | the URL of the JSON Web Key Set (JWK Set) URL (provided by identity providers such as Keycloak or AWS Cognito) to use for validating publishers JWT (take precedence over `publisher_jwt`)                                                     |                        |
+| `subscriber_jwks_url`                | the URL of the JSON Web Key Set (JWK Set) URL to use for validating publishers JWT (take precedence over `publisher_jwt`)                                                                                                                      |                        |
 | `anonymous`                          | allow subscribers with no valid JWT to connect                                                                                                                                                                                                 | `false`                |
 | `publish_origins <origins...>`       | a list of origins allowed publishing, can be `*` for all (only applicable when using cookie-based auth)                                                                                                                                        |                        |
 | `cors_origins <origin...>`           | a list of allowed CORS origins, ([troubleshoot CORS issues](troubleshooting.md#cors-issues))                                                                                                                                                   |                        |
@@ -62,20 +64,41 @@ See also [the list of built-in Caddyfile directives](https://caddyserver.com/doc
 
 The provided `Caddyfile` and the Docker image provide convenient environment variables:
 
-| Environment variable         | Description                                                                                                                          | Default value       |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| `GLOBAL_OPTIONS`             | the [global options block](https://caddyserver.com/docs/caddyfile/options#global-options) to inject in the `Caddyfile`, one per line |                     |
-| `EXTRA_DIRECTIVES`           | [`Caddyfile` statements](https://caddyserver.com/docs/caddyfile)                                                                     |                     |
-| `SERVER_NAME`                | the server name or address                                                                                                           | `localhost`         |
-| `MERCURE_TRANSPORT_URL`      | the value passed to the `transport_url` directive                                                                                    | `bolt://mercure.db` |
-| `MERCURE_PUBLISHER_JWT_KEY`  | the JWT key to use for publishers                                                                                                    |                     |
-| `MERCURE_PUBLISHER_JWT_ALG`  | the JWT algorithm to use for publishers                                                                                              | `HS256`             |
-| `MERCURE_SUBSCRIBER_JWT_KEY` | the JWT key to use for subscribers                                                                                                   |                     |
-| `MERCURE_SUBSCRIBER_JWT_ALG` | the JWT algorithm to use for subscribers                                                                                             | `HS256`             |
-| `MERCURE_EXTRA_DIRECTIVES`   | a list of extra Mercure directives inject in the Caddy file, one per line                                                            |                     |
-| `MERCURE_LICENSE`            | the license to use ([only applicable for the HA version](cluster.md))                                                                |                     |
+| Environment variable           | Description                                                                                                                                                                                                          | Default value       |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `GLOBAL_OPTIONS`               | the [global options block](https://caddyserver.com/docs/caddyfile/options#global-options) to inject in the `Caddyfile`, one per line                                                                                 |                     |
+| `CADDY_EXTRA_CONFIG`           | the [snippet](https://caddyserver.com/docs/caddyfile/concepts#snippets) or the [named-routes](https://caddyserver.com/docs/caddyfile/concepts#named-routes) options block to inject in the `Caddyfile`, one per line |                     |
+| `CADDY_SERVER_EXTRA_DIRECTIVES`| [`Caddyfile` directives](https://caddyserver.com/docs/caddyfile/concepts#directives)                                                                                                                                 |                     |
+| `SERVER_NAME`                  | the server name or address                                                                                                                                                                                           | `localhost`         |
+| `MERCURE_TRANSPORT_URL`        | the value passed to the `transport_url` directive                                                                                                                                                                    | `bolt://mercure.db` |
+| `MERCURE_PUBLISHER_JWT_KEY`    | the JWT key to use for publishers                                                                                                                                                                                    |                     |
+| `MERCURE_PUBLISHER_JWT_ALG`    | the JWT algorithm to use for publishers                                                                                                                                                                              | `HS256`             |
+| `MERCURE_SUBSCRIBER_JWT_KEY`   | the JWT key to use for subscribers                                                                                                                                                                                   |                     |
+| `MERCURE_SUBSCRIBER_JWT_ALG`   | the JWT algorithm to use for subscribers                                                                                                                                                                             | `HS256`             |
+| `MERCURE_EXTRA_DIRECTIVES`     | a list of extra [Mercure directives](#directives) inject in the Caddy file, one per line                                                                                                                             |                     |
+| `MERCURE_LICENSE`              | the license to use ([only applicable for the HA version](cluster.md))                                                                                                                                                |                     |
+
+## HealthCheck
+
+The Mercure.rocks Hub provides a `/healthz` endpoint that returns a `200 OK` status code if the server is healthy.
+
+Here is an example of how to use the health check in a Docker Compose file:
+```yaml
+# compose.yaml
+services:
+  mercure:
+    # ...
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://localhost/healthz"]
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+```
 
 ## JWT Verification
+
+JWT can validated using HMAC and RSA algorithms.
+In addition, it's possible to use JSON Web Key Sets (JWK Sets) (usually provided by OAuth and OIDC providers such as Keycloak or Amazon Cognito) to validate the keys.
 
 When using RSA public keys for verification make sure the key is properly formatted and make sure to set the correct algorithm as second parameter of the `publisher_jwt` or `subscriber_jwt` directives (for example `RS256`).
 

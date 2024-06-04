@@ -1,7 +1,7 @@
 <!-- markdownlint-disable -->
 # Mercure Chart for Kubernetes
 
-![Version: 0.15.5](https://img.shields.io/badge/Version-0.15.5-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.15.5](https://img.shields.io/badge/AppVersion-v0.15.5-informational?style=flat-square)
+![Version: 0.16.1](https://img.shields.io/badge/Version-0.16.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.16.1](https://img.shields.io/badge/AppVersion-v0.16.1-informational?style=flat-square)
 
 A Helm chart to install a Mercure Hub in a Kubernetes cluster. Mercure is a protocol to push data updates to web browsers and other HTTP clients in a convenient, fast, reliable and battery-efficient way.
 
@@ -20,6 +20,7 @@ To install the chart with the release name `my-release`, run the following comma
 |-----|------|---------|-------------|
 | affinity | object | `{}` | [Affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity) configuration. See the [API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling) for details. |
 | autoscaling | object | Disabled by default. | Autoscaling must not be enabled unless you are using [the High Availability version](https://mercure.rocks/docs/hub/cluster) (see [values.yaml](values.yaml) for details). |
+| caddyExtraConfig | string | `""` | Inject snippet or named-routes options in the Caddyfile |
 | caddyExtraDirectives | string | `""` | Inject extra Caddy directives in the Caddyfile. |
 | dev | bool | `false` | Enable the development mode, including the debug UI and the demo. |
 | extraDirectives | string | `""` | Inject extra Mercure directives in the Caddyfile. |
@@ -50,6 +51,7 @@ To install the chart with the release name `my-release`, run the following comma
 | securityContext | object | `{}` | Container [security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container). See the [API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-1) for details. |
 | service.annotations | object | `{}` |  |
 | service.port | int | `80` | Service port. |
+| service.targetPort | int | `80` | Service target port. |
 | service.type | string | `"ClusterIP"` | Kubernetes [service type](https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types). |
 | serviceAccount.annotations | object | `{}` | Annotations to add to the service account. |
 | serviceAccount.create | bool | `true` | Specifies whether a service account should be created. |

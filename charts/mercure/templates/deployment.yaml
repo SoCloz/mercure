@@ -41,13 +41,18 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: SERVER_NAME
-              value: :80
+              value: :{{ .Values.service.targetPort }}
             - name: GLOBAL_OPTIONS
               valueFrom:
                 configMapKeyRef:
                   name: {{ include "mercure.fullname" . }}
                   key: global-options
-            - name: EXTRA_DIRECTIVES
+            - name: CADDY_EXTRA_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mercure.fullname" . }}
+                  key: caddy-extra-config
+            - name: CADDY_SERVER_EXTRA_DIRECTIVES
               valueFrom:
                 secretKeyRef:
                   name: {{ include "mercure.fullname" . }}
@@ -94,7 +99,7 @@ spec:
           {{- end }}
           ports:
             - name: http
-              containerPort: 80
+              containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
           livenessProbe:
             httpGet:

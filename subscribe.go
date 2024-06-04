@@ -147,7 +147,7 @@ func (h *Hub) SubscribeHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				heartbeatTimer.Reset(h.heartbeat)
 			}
-			if c := h.logger.Check(zap.InfoLevel, "Update sent"); c != nil {
+			if c := h.logger.Check(zap.DebugLevel, "Update sent"); c != nil {
 				c.Write(zap.Object("subscriber", s), zap.Object("update", update))
 			}
 		}
@@ -162,16 +162,16 @@ func (h *Hub) registerSubscriber(w http.ResponseWriter, r *http.Request) (*Subsc
 	var privateTopics []string
 	var claims *claims
 
-	if h.subscriberJWT != nil {
+	if h.subscriberJWTKeyFunc != nil {
 		var err error
-		claims, err = authorize(r, h.subscriberJWT, nil, h.cookieName)
+		claims, err = authorize(r, h.subscriberJWTKeyFunc, nil, h.cookieName)
 		if claims != nil {
 			s.Claims = claims
 			privateTopics = claims.Mercure.Subscribe
 		}
 		if err != nil || (claims == nil && !h.anonymous) {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			if c := h.logger.Check(zap.InfoLevel, "Subscriber unauthorized"); c != nil {
+			if c := h.logger.Check(zap.DebugLevel, "Subscriber unauthorized"); c != nil {
 				c.Write(zap.Object("subscriber", s), zap.Error(err))
 			}
 
