@@ -3,7 +3,7 @@
 	{$GLOBAL_OPTIONS}
 }
 
-{$CADDY_EXTRA_CONFIG}
+{$CADDY_EXTRA_CONFIG} 
 
 {$SERVER_NAME:localhost} {
 	log {
@@ -41,6 +41,6 @@
 
 	respond /healthz 200
 	respond /robots.txt `User-agent: *
-Disallow: /`
+	Disallow: /`
 	respond "Not Found" 404
 }
