@@ -13,4 +13,4 @@ ENV MERCURE_TRANSPORT_URL=bolt:///data/mercure.db
 RUN apk upgrade --update --no-cache
 COPY --from=builder /go/src/mercure/caddy/mercure/mercure /usr/bin/caddy
 COPY --from=builder /go/src/mercure/Caddyfile /etc/caddy/Caddyfile
-COPY --from=builder /go/src/mercure/Caddyfile.dev /etc/caddy/Caddyfile.dev
+COPY --from=builder /go/src/mercure/dev.Caddyfile /etc/caddy/dev.Caddyfile
