@@ -3,6 +3,7 @@ package mercure
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -146,6 +147,8 @@ func NewRedisTCPTransport(iu *url.URL, l Logger) (Transport, error) {
 		go rt.cleanup()
 	}
 
+	rt.StartListening()
+
 	return rt, nil
 }
 
@@ -183,6 +186,8 @@ func NewRedisUnixTransport(iu *url.URL, l Logger) (Transport, error) {
 	if rt.cleanupInterval > 0 {
 		go rt.cleanup()
 	}
+
+	rt.StartListening()
 
 	return rt, nil
 }
@@ -225,70 +230,7 @@ func (t *RedisTransport) Dispatch(update *Update) error {
 		return err
 	}
 
-	for _, s := range t.subscribers.MatchAny(update) {
-		s.Dispatch(update, false)
-	}
-
 	return nil
-}
-
-func (t *RedisTransport) dispatchHistory(s *Subscriber) (err error) {
-	key := "0-0"
-	ctx := context.Background()
-	val, e := t.client.Get(ctx, s.RequestLastEventID).Result()
-	if e == nil {
-		key = val
-	} else if e != redis.Nil {
-		if c := t.logger.Check(zap.ErrorLevel, "Can't find RequestLastEventID"); c != nil {
-			c.Write(zap.String("RequestLastEventID", s.RequestLastEventID))
-		}
-	}
-
-	if dbg := t.logger.Check(zap.DebugLevel, "dispatchHistory"); dbg != nil {
-		dbg.Write(zap.String("RequestLastEventID", s.RequestLastEventID),
-			zap.String("key", key))
-	}
-
-	res, e := t.client.XReadStreams(ctx, t.stream, key).Result()
-	if e != nil {
-		err = fmt.Errorf("XREAD error: %w", e)
-		return
-	}
-
-	if dbg := t.logger.Check(zap.DebugLevel, "dispatchHistory"); dbg != nil {
-		dbg.Write(zap.Int("Message count", len(res[0].Messages)))
-	}
-
-	responseLastEventID := EarliestLastEventID
-
-	for _, msg := range res[0].Messages {
-		var update *Update
-		v, ok := msg.Values[`update`]
-		if !ok {
-			err = fmt.Errorf("malformed update message for %s", key)
-			break
-		}
-		if upds, ok := v.(string); ok {
-			if dbg := t.logger.Check(zap.DebugLevel, "dispatchHistory"); dbg != nil {
-				dbg.Write(zap.String("Update", upds))
-			}
-			if err = json.Unmarshal([]byte(upds), &update); err != nil {
-				break
-			}
-
-			if s.Match(update) && s.Dispatch(update, true) {
-				responseLastEventID = msg.ID
-			}
-		} else {
-			err = fmt.Errorf("bad update type for %s", key)
-			break
-		}
-	}
-	if dbg := t.logger.Check(zap.DebugLevel, "dispatchHistory"); dbg != nil {
-		dbg.Write(zap.String("responseLastEventID", responseLastEventID))
-	}
-	s.HistoryDispatched(responseLastEventID)
-	return err
 }
 
 // AddSubscriber adds a new subscriber to the transport.
@@ -306,15 +248,6 @@ func (t *RedisTransport) AddSubscriber(s *Subscriber) error {
 	t.Lock()
 	t.subscribers.Add(s)
 	t.Unlock()
-
-	if s.RequestLastEventID != "" {
-		if err := t.dispatchHistory(s); err != nil {
-			if c := t.logger.Check(zap.ErrorLevel, "Dispatch error"); c != nil {
-				c.Write(zap.Error(err))
-			}
-			return err
-		}
-	}
 
 	s.Ready()
 	return nil
@@ -482,6 +415,77 @@ func (t *RedisTransport) cleanup() {
 	}
 	for t.trim() == nil {
 		time.Sleep(t.cleanupInterval)
+	}
+}
+
+// StartListening starts listening to the Redis stream for new updates.
+func (t *RedisTransport) StartListening() {
+	go func() {
+		for {
+			select {
+			case <-t.closed:
+				return
+			default:
+				t.listenForUpdates()
+			}
+		}
+	}()
+}
+
+// listenForUpdates listens to the Redis stream for new updates and dispatches them to subscribers.
+func (t *RedisTransport) listenForUpdates() {
+	ctx := context.Background()
+	// Use the last known ID or start from the beginning.
+	lastID := "0"
+	for {
+		select {
+		case <-t.closed:
+			return
+		default:
+			// Read new messages from the stream.
+			res, err := t.client.XRead(ctx, &redis.XReadArgs{
+				Streams: []string{t.stream, lastID},
+				Block:   0, // Block indefinitely
+			}).Result()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					continue
+				}
+				if c := t.logger.Check(zap.ErrorLevel, "Error reading from stream"); c != nil {
+					c.Write(zap.Error(err))
+				}
+				time.Sleep(time.Second)
+
+				continue
+			}
+
+			for _, msg := range res[0].Messages {
+				lastID = msg.ID
+				updateJSON, ok := msg.Values["update"].(string)
+				if !ok {
+					if c := t.logger.Check(zap.ErrorLevel, "Invalid message format"); c != nil {
+						c.Write(zap.Any("message", msg))
+					}
+
+					continue
+				}
+
+				var update Update
+				if err := json.Unmarshal([]byte(updateJSON), &update); err != nil {
+					if c := t.logger.Check(zap.ErrorLevel, "Error unmarshalling update"); c != nil {
+						c.Write(zap.Error(err))
+					}
+
+					continue
+				}
+
+				t.Lock()
+				for _, s := range t.subscribers.MatchAny(&update) {
+					s.Dispatch(&update, false)
+				}
+				t.Unlock()
+			}
+		}
 	}
 }
 
